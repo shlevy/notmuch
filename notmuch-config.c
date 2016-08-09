@@ -62,6 +62,7 @@ static const char user_config_comment[] =
     "\tname		Your full name.\n"
     "\tprimary_email	Your primary email address.\n"
     "\tother_email	A list (separated by ';') of other email addresses\n"
+    "\tother_name	A list (separated by ';') of names corresponding to other_email addresses. Leave an entry blank to use default\n"
     "\t		at which you receive email.\n"
     "\n"
     " Notmuch will use the various email addresses configured here when\n"
@@ -120,6 +121,8 @@ struct _notmuch_config {
     char *user_primary_email;
     const char **user_other_email;
     size_t user_other_email_length;
+    const char **user_other_name;
+    size_t user_other_name_length;
     const char **new_tags;
     size_t new_tags_length;
     const char **new_ignore;
@@ -237,6 +240,8 @@ get_username_from_passwd_file (void *ctx)
  *
  *		user_other_email:	Not set.
  *
+ *		user_other_name:	Not set.
+ *
  *	The default configuration also contains comments to guide the
  *	user in editing the file directly.
  */
@@ -280,6 +285,8 @@ notmuch_config_open (void *ctx,
     config->user_primary_email = NULL;
     config->user_other_email = NULL;
     config->user_other_email_length = 0;
+    config->user_other_name = NULL;
+    config->user_other_name_length = 0;
     config->new_tags = NULL;
     config->new_tags_length = 0;
     config->new_ignore = NULL;
@@ -674,6 +681,23 @@ notmuch_config_set_user_other_email (notmuch_config_t *config,
 		     &(config->user_other_email));
 }
 
+const char **
+notmuch_config_get_user_other_name (notmuch_config_t *config, size_t *length)
+{
+    return _config_get_list (config, "user", "other_name",
+			     &(config->user_other_name),
+			     &(config->user_other_name_length), length);
+}
+
+void
+notmuch_config_set_user_other_name (notmuch_config_t *config,
+				    const char *list[],
+				    size_t length)
+{
+    _config_set_list (config, "user", "other_name", list, length,
+		     &(config->user_other_name));
+}
+
 void
 notmuch_config_set_new_tags (notmuch_config_t *config,
 				     const char *list[],
@@ -790,6 +814,13 @@ notmuch_config_command_get (notmuch_config_t *config, char *item)
 	other_email = notmuch_config_get_user_other_email (config, &length);
 	for (i = 0; i < length; i++)
 	    printf ("%s\n", other_email[i]);
+    } else if (strcmp(item, "user.other_name") == 0) {
+	const char **other_name;
+	size_t i, length;
+
+	other_name = notmuch_config_get_user_other_name (config, &length);
+	for (i = 0; i < length; i++)
+	    printf ("%s\n", other_name[i]);
     } else if (strcmp(item, "new.tags") == 0) {
 	const char **tags;
 	size_t i, length;

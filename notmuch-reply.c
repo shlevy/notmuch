@@ -118,25 +118,41 @@ match_address (const char *str, const char *address, address_match_t mode)
 }
 
 /* Match given string against user's configured "primary" and "other"
- * addresses according to mode. */
+ * addresses according to mode.
+ *
+ * If 'user_from_name' is non-NULL and the address is found,
+ * *user_from_name is set to the corresponding name
+ */
 static const char *
-address_match (const char *str, notmuch_config_t *config, address_match_t mode)
+address_match (const char *str, notmuch_config_t *config, const char **user_from_name, address_match_t mode)
 {
     const char *primary;
     const char **other;
-    size_t i, other_len;
+    const char **other_name;
+    size_t i, other_len, other_name_len;
 
     if (!str || *str == '\0')
 	return NULL;
 
     primary = notmuch_config_get_user_primary_email (config);
-    if (match_address (str, primary, mode))
+    if (match_address (str, primary, mode)) {
+	if (user_from_name != NULL)
+	    *user_from_name = notmuch_config_get_user_name (config);
 	return primary;
+    }
 
     other = notmuch_config_get_user_other_email (config, &other_len);
     for (i = 0; i < other_len; i++) {
-	if (match_address (str, other[i], mode))
+	if (match_address (str, other[i], mode)) {
+	    if (user_from_name != NULL) {
+		other_name = notmuch_config_get_user_other_name (config, &other_name_len);
+		if (i < other_name_len)
+		    *user_from_name = other_name[i];
+		else
+		    *user_from_name = NULL;
+	    }
 	    return other[i];
+	}
     }
 
     return NULL;
@@ -144,28 +160,41 @@ address_match (const char *str, notmuch_config_t *config, address_match_t mode)
 
 /* Does the given string contain an address configured as one of the
  * user's "primary" or "other" addresses. If so, return the matching
- * address, NULL otherwise. */
+ * address, NULL otherwise.
+ *
+ * If 'user_from_name' is non-NULL and the address is the user's,
+ * *user_from_name is set to the corresponding name
+ */
 static const char *
-user_address_in_string (const char *str, notmuch_config_t *config)
+user_address_in_string (const char *str, notmuch_config_t *config, const char **user_from_name)
 {
-    return address_match (str, config, USER_ADDRESS_IN_STRING);
+    return address_match (str, config, user_from_name, USER_ADDRESS_IN_STRING);
 }
 
 /* Do any of the addresses configured as one of the user's "primary"
  * or "other" addresses contain the given string. If so, return the
- * matching address, NULL otherwise. */
+ * matching address, NULL otherwise.
+ *
+ * If 'user_from_name' is non-NULL and the address is the user's,
+ * *user_from_name is set to the corresponding name
+ */
 static const char *
-string_in_user_address (const char *str, notmuch_config_t *config)
+string_in_user_address (const char *str, notmuch_config_t *config, const char **user_from_name)
 {
-    return address_match (str, config, STRING_IN_USER_ADDRESS);
+    return address_match (str, config, user_from_name, STRING_IN_USER_ADDRESS);
 }
 
 /* Is the given address configured as one of the user's "primary" or
- * "other" addresses. */
+ * "other" addresses.
+ *
+ * If 'user_from_name' is non-NULL and the address is the user's,
+ * *user_from_name is set to the corresponding name
+ *
+ */
 static notmuch_bool_t
-address_is_users (const char *address, notmuch_config_t *config)
+address_is_users (const char *address, notmuch_config_t *config, const char **user_from_name)
 {
-    return address_match (address, config, STRING_IS_USER_ADDRESS) != NULL;
+    return address_match (address, config, user_from_name, STRING_IS_USER_ADDRESS) != NULL;
 }
 
 /* Scan addresses in 'list'.
@@ -178,6 +207,9 @@ address_is_users (const char *address, notmuch_config_t *config)
  * be set to the first address encountered in 'list' that is the
  * user's address.
  *
+ * If 'user_from_name' is non-NULL and *user_from is set by this call,
+ * *user_from_name will be set to the name corresponding to *user_from.
+ *
  * Return the number of addresses added to 'message'. (If 'message' is
  * NULL, the function returns 0 by definition.)
  */
@@ -186,7 +218,8 @@ scan_address_list (InternetAddressList *list,
 		   notmuch_config_t *config,
 		   GMimeMessage *message,
 		   GMimeRecipientType type,
-		   const char **user_from)
+		   const char **user_from,
+		   const char **user_from_name)
 {
     InternetAddress *address;
     int i;
@@ -203,7 +236,7 @@ scan_address_list (InternetAddressList *list,
 	    if (group_list == NULL)
 		continue;
 
-	    n += scan_address_list (group_list, config, message, type, user_from);
+	    n += scan_address_list (group_list, config, message, type, user_from, user_from_name);
 	} else {
 	    InternetAddressMailbox *mailbox;
 	    const char *name;
@@ -214,7 +247,7 @@ scan_address_list (InternetAddressList *list,
 	    name = internet_address_get_name (address);
 	    addr = internet_address_mailbox_get_addr (mailbox);
 
-	    if (address_is_users (addr, config)) {
+	    if (address_is_users (addr, config, user_from_name)) {
 		if (user_from && *user_from == NULL)
 		    *user_from = addr;
 	    } else if (message) {
@@ -238,7 +271,8 @@ scan_address_string (const char *recipients,
 		     notmuch_config_t *config,
 		     GMimeMessage *message,
 		     GMimeRecipientType type,
-		     const char **user_from)
+		     const char **user_from,
+		     const char **user_from_name)
 {
     InternetAddressList *list;
 
@@ -249,7 +283,7 @@ scan_address_string (const char *recipients,
     if (list == NULL)
 	return 0;
 
-    return scan_address_list (list, config, message, type, user_from);
+    return scan_address_list (list, config, message, type, user_from, user_from_name);
 }
 
 /* Does the address in the Reply-To header of 'message' already appear
@@ -300,6 +334,10 @@ reply_to_header_is_redundant (notmuch_message_t *message)
  * (typically this would be reply-to-sender, but also handles reply to
  * user's own message in a sensible way).
  *
+ * If 'from_name' is non-NULL and any of the user's addresses were found
+ * in these headers and the user specified an alternate name for that
+ * address, it will be set to the corresponding value.
+ *
  * If any of the user's addresses were found in these headers, the
  * first of these returned, otherwise NULL is returned.
  */
@@ -307,7 +345,8 @@ static const char *
 add_recipients_from_message (GMimeMessage *reply,
 			     notmuch_config_t *config,
 			     notmuch_message_t *message,
-			     notmuch_bool_t reply_all)
+			     notmuch_bool_t reply_all,
+			     const char **from_name)
 {
     struct {
 	const char *header;
@@ -349,7 +388,7 @@ add_recipients_from_message (GMimeMessage *reply,
 						     reply_to_map[i].fallback);
 
 	n += scan_address_string (recipients, config, reply,
-				  reply_to_map[i].recipient_type, &from_addr);
+				  reply_to_map[i].recipient_type, &from_addr, from_name);
 
 	if (!reply_all && n) {
 	    /* Stop adding new recipients in reply-to-sender mode if
@@ -375,10 +414,13 @@ add_recipients_from_message (GMimeMessage *reply,
  * Look for the user's address in " for <email@add.res>" in the
  * received headers.
  *
+ * If 'user_from_name' is non-NULL and the address is found,
+ * *user_from_name is set to the corresponding name.
+ *
  * Return the address that was found, if any, and NULL otherwise.
  */
 static const char *
-guess_from_in_received_for (notmuch_config_t *config, const char *received)
+guess_from_in_received_for (notmuch_config_t *config, const char *received, const char **user_from_name)
 {
     const char *ptr;
 
@@ -386,7 +428,7 @@ guess_from_in_received_for (notmuch_config_t *config, const char *received)
     if (! ptr)
 	return NULL;
 
-    return user_address_in_string (ptr, config);
+    return user_address_in_string (ptr, config, user_from_name);
 }
 
 /*
@@ -399,10 +441,13 @@ guess_from_in_received_for (notmuch_config_t *config, const char *received)
  * - and then assume that the first whitespace delimited token that
  * follows is the receiving system in this step of the receive chain.
  *
+ * If 'user_from_name' is non-NULL and the address is found,
+ * *user_from_name is set to the corresponding name.
+ *
  * Return the address that was found, if any, and NULL otherwise.
  */
 static const char *
-guess_from_in_received_by (notmuch_config_t *config, const char *received)
+guess_from_in_received_by (notmuch_config_t *config, const char *received, const char **user_from_name)
 {
     const char *addr;
     const char *by = received;
@@ -440,7 +485,7 @@ guess_from_in_received_by (notmuch_config_t *config, const char *received)
 	     */
 	    *(tld - 1) = '.';
 
-	    addr = string_in_user_address (domain, config);
+	    addr = string_in_user_address (domain, config, user_from_name);
 	    if (addr) {
 		free (mta);
 		return addr;
@@ -460,11 +505,15 @@ guess_from_in_received_by (notmuch_config_t *config, const char *received)
  * The Received: header is special in our get_header function and is
  * always concatenated.
  *
+ * If 'user_from_name' is non-NULL and the address is found,
+ * *user_from_name is set to the corresponding name.
+ *
  * Return the address that was found, if any, and NULL otherwise.
  */
 static const char *
 guess_from_in_received_headers (notmuch_config_t *config,
-				notmuch_message_t *message)
+				notmuch_message_t *message,
+				const char **user_from_name)
 {
     const char *received, *addr;
     char *sanitized;
@@ -477,9 +526,9 @@ guess_from_in_received_headers (notmuch_config_t *config,
     if (! sanitized)
 	return NULL;
 
-    addr = guess_from_in_received_for (config, sanitized);
+    addr = guess_from_in_received_for (config, sanitized, user_from_name);
     if (! addr)
-	addr = guess_from_in_received_by (config, sanitized);
+	addr = guess_from_in_received_by (config, sanitized, user_from_name);
 
     talloc_free (sanitized);
 
@@ -491,10 +540,13 @@ guess_from_in_received_headers (notmuch_config_t *config,
  * headers: Envelope-To, X-Original-To, and Delivered-To (searched in
  * that order).
  *
+ * If 'user_from_name' is non-NULL and the address is found,
+ * *user_from_name is set to the corresponding name.
+ *
  * Return the address that was found, if any, and NULL otherwise.
  */
 static const char *
-get_from_in_to_headers (notmuch_config_t *config, notmuch_message_t *message)
+get_from_in_to_headers (notmuch_config_t *config, notmuch_message_t *message, const char **user_from_name)
 {
     size_t i;
     const char *tohdr, *addr;
@@ -508,7 +560,7 @@ get_from_in_to_headers (notmuch_config_t *config, notmuch_message_t *message)
 	tohdr = notmuch_message_get_header (message, to_headers[i]);
 
 	/* Note: tohdr potentially contains a list of email addresses. */
-	addr = user_address_in_string (tohdr, config);
+	addr = user_address_in_string (tohdr, config, user_from_name);
 	if (addr)
 	    return addr;
     }
@@ -523,7 +575,7 @@ create_reply_message(void *ctx,
 		     notmuch_bool_t reply_all)
 {
     const char *subject, *from_addr = NULL;
-    const char *in_reply_to, *orig_references, *references;
+    const char *in_reply_to, *orig_references, *references, *from_name;
 
     /* The 1 means we want headers in a "pretty" order. */
     GMimeMessage *reply = g_mime_message_new (1);
@@ -540,7 +592,7 @@ create_reply_message(void *ctx,
     }
 
     from_addr = add_recipients_from_message (reply, config,
-					     message, reply_all);
+					     message, reply_all, &from_name);
 
     /*
      * Sadly, there is no standard way to find out to which email
@@ -555,7 +607,7 @@ create_reply_message(void *ctx,
      * Delivered-To: headers.
      */
     if (from_addr == NULL)
-	from_addr = get_from_in_to_headers (config, message);
+	from_addr = get_from_in_to_headers (config, message, &from_name);
 
     /*
      * Check for a (for <email@add.res>) clause in Received: headers,
@@ -563,14 +615,17 @@ create_reply_message(void *ctx,
      * of Received: headers
      */
     if (from_addr == NULL)
-	from_addr = guess_from_in_received_headers (config, message);
+	from_addr = guess_from_in_received_headers (config, message, &from_name);
 
     /* Default to user's primary address. */
-    if (from_addr == NULL)
+    if (from_addr == NULL) {
 	from_addr = notmuch_config_get_user_primary_email (config);
+	from_name = notmuch_config_get_user_name (config);
+    } else if (from_name == NULL || from_name[0] == '\0')
+	from_name = notmuch_config_get_user_name (config);
 
     from_addr = talloc_asprintf (ctx, "%s <%s>",
-				 notmuch_config_get_user_name (config),
+				 from_name,
 				 from_addr);
     g_mime_object_set_header (GMIME_OBJECT (reply),
 			      "From", from_addr);
@@ -751,7 +806,7 @@ notmuch_reply_format_headers_only(void *ctx,
 	g_mime_object_set_header (GMIME_OBJECT (reply),
 				  "References", references);
 
-	(void)add_recipients_from_message (reply, config, message, reply_all);
+	(void)add_recipients_from_message (reply, config, message, reply_all, NULL);
 
 	reply_headers = g_mime_object_to_string (GMIME_OBJECT (reply));
 	printf ("%s", reply_headers);
